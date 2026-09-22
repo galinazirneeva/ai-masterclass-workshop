@@ -156,3 +156,4 @@ September 30, 2026 | SimCorp Copenhagen | 5:00 - 8:00pm
 Organized by TechWomen Copenhagen x Women in Data & Analytics
 
 Presenters: Galina Zirneeva, Monique Marins, Sara Mehrabi
+# AI Reality Check Workshop
