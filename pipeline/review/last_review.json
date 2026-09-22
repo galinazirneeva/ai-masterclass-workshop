@@ -1,0 +1,32 @@
+{
+  "approved": false,
+  "issues": [
+    "CRITICAL: No methodology_critical files are present for review. The spec mandates that pipeline/src/baseline.py, pipeline/src/scoring.py, pipeline/src/alert_ranking.py, and pipeline/src/llm_interpretation.py must all be present and reviewed before merge. None were submitted.",
+    "CRITICAL: DeepSeek was not used to generate tests. Git log confirms deepseek_used=false with no evidence of API-generated test content. Tests appear to be manually written, which violates the project's test generation policy as flagged by the review gate.",
+    "HIGH: test_black_friday_is_not_flagged_when_context_is_loaded asserts 'revenue_usd' and 'orders_count' are NOT in anomalies for 2025-11-28, but the spec (section 9.1) explicitly states this date should trigger a revenue_surge and multi-metric order burst anomaly. The test contradicts the spec: Black Friday should still be detected as anomalous but labeled as context-adjusted/expected \u2014 not silently suppressed from detection entirely.",
+    "HIGH: The test for Black Friday with context suppresses the anomaly entirely rather than verifying it is correctly classified as a context-aware or campaign-driven anomaly with reduced severity. This risks silently hiding genuine revenue or order anomalies on high-context days.",
+    "HIGH: Silent failure risk in _candidate_map: when context_loaded=False, the function calls compute_expected_baselines(metrics_df) without the merged context, meaning the context-adjustment code path is bypassed with no error or warning. This is a silent degradation of detection quality with no observable failure.",
+    "MEDIUM: test_missing_context_halts_the_pipeline only checks for FileNotFoundError or ValueError. The spec (section 5.1) requires graceful degradation with default baselines, not necessarily a halt. These two requirements are in direct conflict and the test enforces the wrong behavior unless the design decision to halt is explicitly documented.",
+    "MEDIUM: No tests validate the LLM interpretation layer (llm_interpretation.py), structured prompt schema compatibility, or LLM output schema enforcement. The spec section 13 requires LLM prompt schema compatibility tests.",
+    "MEDIUM: No tests validate severity or confidence scoring (alert_ranking.py). The spec requires tests for severity thresholds and confidence aggregation.",
+    "MEDIUM: No tests validate the multi-signal coordinated anomaly type (section 4.2, item 7) where combined revenue, churn, and support tickets indicate a deeper issue.",
+    "MEDIUM: No tests validate the 2025-11-05 revenue collapse as a critical/high severity event \u2014 only that certain metrics appear in the anomaly list. The score magnitude and severity label are not asserted.",
+    "LOW: No tests validate data quality rules from section 10: duplicate dates, impossible negative revenue, churn > 1.0, or invalid date ordering.",
+    "LOW: No tests validate the composite anomaly score formula from section 6.4, meaning weight tuning could silently miscalibrate without test regression coverage.",
+    "LOW: The _candidate_map helper is called with a hardcoded z_threshold=3.0 but the spec does not define a fixed threshold. There is no test verifying that threshold sensitivity is appropriate for the business context, creating a risk of missed anomalies if the threshold is too high."
+  ],
+  "recommendations": [
+    "Do not approve this PR until all four methodology_critical files (baseline.py, scoring.py, alert_ranking.py, llm_interpretation.py) are submitted and reviewed against the architecture spec.",
+    "Regenerate tests using DeepSeek API as required by project policy. Manually written tests should not be merged under the current gate methodology.",
+    "Revise test_black_friday_is_not_flagged_when_context_is_loaded: Black Friday (2025-11-28) should still appear as a detected anomaly but with a context label such as 'campaign_expected' or 'revenue_surge_context_adjusted', not be absent from the candidate map entirely. The test should assert anomaly_type or a context flag rather than asserting the metric is absent.",
+    "Add an explicit test that verifies context-adjusted anomalies on campaign/holiday days carry a reduced severity or a specific context label, rather than asserting they are invisible to the detector.",
+    "Add a test that verifies 2025-11-05 receives a critical or high severity rating with both revenue_shortfall and support_spike anomaly types as described in spec section 9.3.",
+    "Add tests for the LLM interpretation layer: prompt schema validation, output schema enforcement, and guardrail behavior (no invented facts).",
+    "Add tests for alert_ranking.py severity thresholds: critical above 0.9, high between 0.75-0.89, medium between 0.5-0.74.",
+    "Add data quality validation tests: negative revenue, churn > 1.0, duplicate dates, and missing required columns.",
+    "Resolve the contradiction between test_missing_context_halts_the_pipeline and spec section 5.1 (graceful degradation). Either update the spec to allow halting or update the test to expect a warning with fallback behavior.",
+    "Add a test for the multi-signal coordinated anomaly type to ensure combined metric deterioration is captured as a distinct incident.",
+    "Add logging or an explicit warning in _candidate_map and the production pipeline when context is not loaded, to prevent silent quality degradation."
+  ],
+  "deepseek_used": false
+}
