@@ -51,6 +51,38 @@ def compute_combined_anomaly_score(row: pd.Series) -> float:
     return score
 
 
+def _detect_revenue_support_correlation(row: pd.Series) -> dict | None:
+    """Detect the correlated outage signal: revenue collapse plus support spike on the same day."""
+    revenue_actual = float(row.get("revenue_usd", 0.0) or 0.0)
+    revenue_baseline = float(row.get("revenue_usd_baseline", 0.0) or 0.0)
+    support_actual = float(row.get("support_tickets", 0.0) or 0.0)
+    support_baseline = float(row.get("support_tickets_baseline", 0.0) or 0.0)
+
+    if revenue_baseline <= 0 or support_baseline <= 0:
+        return None
+
+    revenue_condition = revenue_actual < 0.4 * revenue_baseline
+    support_condition = support_actual > 3.0 * support_baseline
+    if not (revenue_condition and support_condition):
+        return None
+
+    revenue_delta = revenue_actual - revenue_baseline
+    support_delta = support_actual - support_baseline
+    signal_strength = max(abs(revenue_delta / max(revenue_baseline, 1.0)), abs(support_delta / max(support_baseline, 1.0)))
+
+    return {
+        "metric": "revenue_support_correlation",
+        "z_score": float(signal_strength * 3.5),
+        "direction": "low",
+        "actual": revenue_actual,
+        "expected": revenue_baseline,
+        "delta": revenue_delta,
+        "severity": "critical",
+        "is_expected": False,
+        "related_metrics": ["revenue_usd", "support_tickets"],
+    }
+
+
 def build_alert_candidates(df: pd.DataFrame, z_threshold: float = 3.0) -> pd.DataFrame:
     """Create a candidate list of dates and metric signals while processing the full date range."""
     result = df.copy().sort_values("date").reset_index(drop=True)
@@ -95,6 +127,10 @@ def build_alert_candidates(df: pd.DataFrame, z_threshold: float = 3.0) -> pd.Dat
                 "delta": row[metric] - row[f"{metric}_expected"],
             })
 
+        correlated = _detect_revenue_support_correlation(row)
+        if correlated is not None:
+            anomalies.append(correlated)
+
         candidate_rows.append({
             "date": row["date"],
             "combined_anomaly_score": row["combined_anomaly_score"],
@@ -111,4 +147,10 @@ def build_alert_candidates(df: pd.DataFrame, z_threshold: float = 3.0) -> pd.Dat
     return pd.DataFrame(candidate_rows)
 
 
-__all__ = ["compute_metric_z_scores", "compute_combined_anomaly_score", "build_alert_candidates", "METRIC_Z_THRESHOLDS"]
+__all__ = [
+    "compute_metric_z_scores",
+    "compute_combined_anomaly_score",
+    "build_alert_candidates",
+    "METRIC_Z_THRESHOLDS",
+    "_detect_revenue_support_correlation",
+]
