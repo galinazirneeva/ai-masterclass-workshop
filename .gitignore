@@ -6,3 +6,4 @@ __pycache__/
 .env
 .en
 pipeline/review/last_review.json
+pipeline/tests/exploratory_deepseek.py

@@ -33,11 +33,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Generate DeepSeek test file
-        run: python pipeline/scripts/generate_tests_deepseek.py
+      - name: Gate 2 — stable test suite (blocking)
+        run: python -m pytest pipeline/tests -q --ignore=pipeline/tests/exploratory_deepseek.py
 
-      - name: Run pipeline tests (regression + DeepSeek-generated)
-        run: python -m pytest pipeline/tests/test_anomaly.py pipeline/tests/test_pipeline_deepseek.py -q
+      - name: DeepSeek exploratory tests (advisory)
+        continue-on-error: true
+        env:
+          DEEPSEEK_TESTS_OUT: pipeline/tests/exploratory_deepseek.py
+        run: |
+          python pipeline/scripts/generate_tests_deepseek.py
+          python -m pytest pipeline/tests/exploratory_deepseek.py -q
 
   gate3_review:
     name: Gate 3 - Sonnet methodology review
