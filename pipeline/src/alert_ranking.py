@@ -34,6 +34,7 @@ def classify_metric_event(metric: str, z_score: float) -> str:
         "customer_churn_rate": "churn_deterioration" if z_score >= 0 else "churn_recovery",
         "support_tickets": "support_spike" if z_score >= 0 else "support_relief",
         "ai_feature_usage_rate": "ai_usage_spike" if z_score >= 0 else "ai_usage_drop",
+        "revenue_support_correlation": "revenue_support_correlation",
     }
     return metric_map.get(metric, "metric_anomaly")
 
@@ -57,18 +58,23 @@ def build_alerts(candidate_df: pd.DataFrame) -> List[Dict[str, Any]]:
         actual_z = float(primary_metric["z_score"])
         anomaly_type = classify_metric_event(actual_metric, actual_z)
 
-        is_expected = (
-            row.get("context", {}).get("holiday") is True
-            or bool(str(row.get("context", {}).get("holiday_name", "")).strip())
-            or bool(str(row.get("context", {}).get("marketing_campaign", "")).strip())
-        ) and anomaly_type == "support_spike"
+        if anomaly_type == "revenue_support_correlation":
+            severity = "critical"
+            confidence = 0.99
+            is_expected = False
+        else:
+            is_expected = (
+                row.get("context", {}).get("holiday") is True
+                or bool(str(row.get("context", {}).get("holiday_name", "")).strip())
+                or bool(str(row.get("context", {}).get("marketing_campaign", "")).strip())
+            ) and anomaly_type == "support_spike"
 
-        revenue_item = next((item for item in anomalies if item["metric"] == "revenue_usd"), None)
-        support_item = next((item for item in anomalies if item["metric"] == "support_tickets"), None)
-        if revenue_item is not None and revenue_item["expected"] > 0 and float(revenue_item["actual"]) < 0.2 * float(revenue_item["expected"]):
-            is_expected = False
-        if support_item is not None and support_item["expected"] > 0 and float(support_item["actual"]) > 5.0 * float(support_item["expected"]):
-            is_expected = False
+            revenue_item = next((item for item in anomalies if item["metric"] == "revenue_usd"), None)
+            support_item = next((item for item in anomalies if item["metric"] == "support_tickets"), None)
+            if revenue_item is not None and revenue_item["expected"] > 0 and float(revenue_item["actual"]) < 0.2 * float(revenue_item["expected"]):
+                is_expected = False
+            if support_item is not None and support_item["expected"] > 0 and float(support_item["actual"]) > 5.0 * float(support_item["expected"]):
+                is_expected = False
 
         record = {
             "date": row["date"].strftime("%Y-%m-%d") if hasattr(row["date"], "strftime") else str(row["date"]),

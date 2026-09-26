@@ -60,6 +60,51 @@ def test_black_friday_is_not_flagged_when_context_is_loaded() -> None:
     assert "support_tickets" in metrics
 
 
+def test_revenue_support_correlation_is_detected() -> None:
+    df = pd.DataFrame([
+        {
+            "date": pd.Timestamp("2025-11-05"),
+            "revenue_usd": 500.0,
+            "orders_count": 20.0,
+            "avg_order_value_usd": 25.0,
+            "customer_churn_rate": 0.06,
+            "support_tickets": 60.0,
+            "ai_feature_usage_rate": 0.15,
+            "revenue_usd_baseline": 2500.0,
+            "revenue_usd_mad": 300.0,
+            "orders_count_baseline": 200.0,
+            "orders_count_mad": 25.0,
+            "avg_order_value_usd_baseline": 100.0,
+            "avg_order_value_usd_mad": 10.0,
+            "customer_churn_rate_baseline": 0.02,
+            "customer_churn_rate_mad": 0.005,
+            "support_tickets_baseline": 15.0,
+            "support_tickets_mad": 5.0,
+            "ai_feature_usage_rate_baseline": 0.10,
+            "ai_feature_usage_rate_mad": 0.02,
+            "revenue_usd_expected": 2500.0,
+            "orders_count_expected": 200.0,
+            "avg_order_value_usd_expected": 100.0,
+            "customer_churn_rate_expected": 0.02,
+            "support_tickets_expected": 15.0,
+            "ai_feature_usage_rate_expected": 0.10,
+            "is_holiday": 0,
+            "holiday_name": "",
+            "is_release_day": 0,
+            "marketing_campaign": "",
+            "expected_revenue_multiplier": 1.0,
+        }
+    ])
+
+    candidates = build_alert_candidates(df, z_threshold=3.0)
+    assert not candidates.empty
+    anomalies = candidates.iloc[0]["anomalies"]
+    correlation = next((item for item in anomalies if item["metric"] == "revenue_support_correlation"), None)
+    assert correlation is not None
+    assert correlation["severity"] == "critical"
+    assert correlation["is_expected"] is False
+
+
 def test_churn_recovery_is_filtered_when_delta_is_near_zero() -> None:
     candidate_map = _candidate_map(context_loaded=True)
     for date in ["2025-11-14", "2025-11-17", "2025-12-21"]:
