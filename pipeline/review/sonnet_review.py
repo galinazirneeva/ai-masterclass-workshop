@@ -25,7 +25,12 @@ CRITICAL_FILES = {
     "pipeline/src/llm_interpretation.py",
 }
 ANTHROPIC_MODEL = "claude-sonnet-4-6"
-SYSTEM_PROMPT = SKILL_PATH.read_text(encoding="utf-8")
+SYSTEM_PROMPT = SKILL_PATH.read_text(encoding="utf-8") + (
+    "\n\n## Output format override (CI)\n"
+    "This review is parsed by a machine. Ignore the markdown output format above. "
+    "Return ONLY one JSON object with the exact shape given in the user message. "
+    "No markdown, no headings, no text before or after the JSON."
+)
 
 
 def run_git_command(*args: str) -> str:
@@ -184,6 +189,8 @@ def pr_diff() -> tuple[str, list[str]]:
 def pipeline_output() -> str:
     """Run the pipeline on data/ and return the alert list the business would see."""
     sys.path.insert(0, str(SRC_DIR))
+    # Run without the API key: the review needs the alerts, not 15 LLM-written summaries.
+    saved_key = os.environ.pop("ANTHROPIC_API_KEY", None)
     try:
         from anomaly_detection import run_pipeline
         alerts = sorted(run_pipeline(ROOT / "data"), key=lambda a: a["date"])
@@ -193,6 +200,9 @@ def pipeline_output() -> str:
         )
     except Exception as exc:  # the review must still run; the failure itself is evidence
         return f"PIPELINE FAILED TO RUN: {exc!r}"
+    finally:
+        if saved_key is not None:
+            os.environ["ANTHROPIC_API_KEY"] = saved_key
 
 
 def build_prompt(methodology_files: list[str], deepseek_info: dict[str, object]) -> str:
@@ -253,7 +263,13 @@ def main() -> int:
     deepseek_info = detect_deepseek_usage()
 
     prompt = build_prompt(methodology_files, deepseek_info)
-    review = parse_response(call_anthropic(prompt))
+    try:
+        review = parse_response(call_anthropic(prompt))
+    except ValueError:
+        print("Gate 3: answer was not JSON, asking once more for JSON only.", file=sys.stderr)
+        review = parse_response(call_anthropic(
+            prompt + "\n\nIMPORTANT: your previous answer was not JSON. Reply with the JSON object only."
+        ))
 
     review.setdefault("verdict", "FAIL")
     review.setdefault("silent_failure_risks", [])
