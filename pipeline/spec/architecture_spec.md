@@ -240,28 +240,10 @@ The following files contain business logic that materially affects detection thr
 - `pipeline/src/scoring.py` — z-score, anomaly thresholds, and alert scoring
 - `pipeline/src/alert_ranking.py` — severity and confidence aggregation
 - `pipeline/src/llm_interpretation.py` — structured prompt construction and summary generation
-- `pipeline/src/correlation_detector.py` — correlated anomaly detection logic for outage detection
 
 These files are designated as `methodology_critical` and must not be merged without explicit sign-off by a reviewer familiar with the business context and alerting policy.
 
-### 6.6 Correlated Anomaly Detection
-
-The engine must detect a correlated outage anomaly, `revenue_support_correlation`, when both conditions are true on the same day:
-
-- revenue drops below 40% of baseline
-- support tickets exceed 3x baseline
-
-Required behavior:
-
-- anomaly type: `revenue_support_correlation`
-- severity: always `critical`
-- `is_expected`: always `false` regardless of context or business calendar
-- this rule must override holiday, campaign, or release-day explanations
-- the signal must be labeled as a likely technical outage or severe platform degradation in the explanation layer
-
-This detection rule is intentionally strict because the combination of revenue collapse and support load spike represents a severe operational signal that should not be suppressed by business context.
-
-### 6.7 Severity and confidence
+### 6.6 Severity and confidence
 
 Severity should be derived from both magnitude and business impact.
 

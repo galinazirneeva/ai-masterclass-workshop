@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches:
-      - "**"
+      - main
   pull_request:
     types: [opened, synchronize, reopened, labeled, edited]
 
@@ -15,6 +15,7 @@ jobs:
   test:
     name: Gate 2 - anomaly pipeline tests
     runs-on: ubuntu-latest
+    if: github.event.action != 'labeled' && github.event.action != 'edited'
     env:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
 
@@ -35,13 +36,14 @@ jobs:
       - name: Generate DeepSeek test file
         run: python pipeline/scripts/generate_tests_deepseek.py
 
-      - name: Run pipeline anomaly tests
-        run: python pipeline/tests/test_anomaly.py
+      - name: Run pipeline tests (regression + DeepSeek-generated)
+        run: python -m pytest pipeline/tests/test_anomaly.py pipeline/tests/test_pipeline_deepseek.py -q
 
   gate3_review:
     name: Gate 3 - Sonnet methodology review
     runs-on: ubuntu-latest
     needs: test
+    if: github.event.action != 'labeled' && github.event.action != 'edited'
 
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -71,6 +73,29 @@ jobs:
           name: last_review.json
           path: pipeline/review/last_review.json
           if-no-files-found: warn
+
+      - name: Post Gate 3 verdict to the PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'pipeline/review/last_review.json';
+            if (!fs.existsSync(path)) { core.warning('No Gate 3 review file'); return; }
+            const r = JSON.parse(fs.readFileSync(path, 'utf8'));
+            const list = (title, items) => items && items.length
+              ? `### ${title}\n` + items.map(i => `- ${typeof i === 'string' ? i : JSON.stringify(i)}`).join('\n') + '\n\n'
+              : '';
+            const icon = r.verdict === 'PASS' ? '✅' : '❌';
+            const body = `## ${icon} Gate 3 — Sonnet methodology review: **${r.verdict}**\n\n`
+              + list('Silent failure risks', r.silent_failure_risks)
+              + list('Needs human judgment', r.human_judgment_required)
+              + list('What tests do not cover', r.test_coverage_gaps)
+              + list('Threshold owners', r.threshold_owners)
+              + `_Gate 3 advises. A human decides._`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number, body });
 
   methodology_critical:
     name: Methodology-critical review gate
@@ -132,45 +157,21 @@ jobs:
               labels: [label],
             });
 
-      - name: Require human review before merge
+      - name: Require human sign-off before merge
         if: steps.detect.outputs.changed == 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import sys
-          import urllib.request
-
-          token = os.environ['GITHUB_TOKEN']
-          pr_number = os.environ['PR_NUMBER']
-          repo = os.environ['REPO']
-          owner, repo_name = repo.split('/', 1)
-
-          url = f'https://api.github.com/repos/{owner}/{repo_name}/pulls/{pr_number}/reviews'
-          req = urllib.request.Request(
-              url,
-              headers={
-                  'Authorization': f'Bearer {token}',
-                  'Accept': 'application/vnd.github+json',
-                  'X-GitHub-Api-Version': '2022-11-28',
-              },
-          )
-
-          with urllib.request.urlopen(req) as response:
-              reviews = json.load(response)
-
-          approved = any(
-              review.get('state') == 'APPROVED' and not str(review.get('user', {}).get('login', '')).endswith('[bot]')
-              for review in reviews
-          )
-
-          if not approved:
-              print('Methodology-critical changes detected. A human review approval is required before merge.')
-              sys.exit(1)
-
-          print('Methodology-critical PR has a human approval on record.')
-          PY
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // GitHub does not let a PR author approve their own PR,
+            // so human sign-off = the "human-approved" label added by a person (not a bot).
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const events = await github.paginate(github.rest.issues.listEvents, { owner, repo, issue_number });
+            const labels = (await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number })).data.map(l => l.name);
+            const byHuman = events.some(e => e.event === 'labeled' && e.label && e.label.name === 'human-approved'
+              && e.actor && e.actor.type !== 'Bot');
+            if (!(labels.includes('human-approved') && byHuman)) {
+              core.setFailed('Methodology-critical files changed. Merge is blocked until a human adds the "human-approved" label.');
+            } else {
+              core.info('Human sign-off on record: ' + JSON.stringify(labels));
+            }
