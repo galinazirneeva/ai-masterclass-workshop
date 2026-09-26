@@ -72,10 +72,23 @@ def build_alert_candidates(df: pd.DataFrame, z_threshold: float = 3.0) -> pd.Dat
                 if expected > 0 and 0.5 <= (actual / expected) <= 2.0:
                     continue
 
-            if metric == "customer_churn_rate" and z_score < 0:
-                delta = float(row[metric] - row[f"{metric}_expected"])
-                if abs(delta) <= 0.01:
-                    continue
+            # An improvement is not an incident: falling churn or falling support load never alerts.
+            if metric in {"customer_churn_rate", "support_tickets"} and z_score < 0:
+                continue
+
+            # Discounts during a campaign lower average order value by design.
+            if metric == "avg_order_value_usd" and z_score < 0 and campaign_active:
+                continue
+
+            # Weekends normally run well below weekdays; a weekend dip is only an alert
+            # if revenue falls below half of the expected level.
+            if metric == "revenue_usd" and z_score < 0:
+                date_value = pd.to_datetime(row["date"])
+                if getattr(date_value, "dayofweek", 0) >= 5:
+                    expected = float(row.get(f"{metric}_expected", 0.0) or 0.0)
+                    actual = float(row.get(metric, 0.0) or 0.0)
+                    if expected > 0 and actual >= 0.5 * expected:
+                        continue
 
             if metric == "orders_count" and z_score < 0:
                 date_value = pd.to_datetime(row["date"])

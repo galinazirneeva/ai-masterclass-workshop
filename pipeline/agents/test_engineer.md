@@ -4,7 +4,7 @@
 DeepSeek deepseek-chat
 
 ## Trigger
-Gate 2 CI run starts automatically after push
+Once per feature, on the feature branch, before the PR is opened. A human reviews the generated tests before they are committed. In CI, DeepSeek only runs an advisory exploratory pass that never blocks merge.
 
 ## Role and goal
 Generate pytest tests that validate business logic

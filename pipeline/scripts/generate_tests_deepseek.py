@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SKILL_PATH = ROOT / "pipeline" / "skills" / "test_engineer.md"
 SCORING_PATH = ROOT / "pipeline" / "src" / "scoring.py"
 BASELINE_PATH = ROOT / "pipeline" / "src" / "baseline.py"
-OUTPUT_PATH = ROOT / "pipeline" / "tests" / "test_pipeline_deepseek.py"
+OUTPUT_PATH = Path(os.getenv("DEEPSEEK_TESTS_OUT", str(ROOT / "pipeline" / "tests" / "test_pipeline_deepseek.py")))
 
 
 def read_text(path: Path) -> str:
@@ -35,7 +35,8 @@ def normalize_generated_code(raw: str) -> str:
 
 
 def build_user_prompt(scoring_src: str, baseline_src: str) -> str:
-    return (
+    focus = os.getenv("DEEPSEEK_FOCUS")
+    prompt = (
         "Generate a pytest regression test file for the anomaly detection pipeline. "
         "Use the business logic in these files as the source of truth.\n\n"
         "Goal: cover threshold logic, context adjustment, and conflict resolution.\n\n"
@@ -51,6 +52,9 @@ def build_user_prompt(scoring_src: str, baseline_src: str) -> str:
         "=== pipeline/src/baseline.py ===\n"
         f"{baseline_src}\n"
     )
+    if focus:
+        prompt += f"\nFocus only on: {focus}\n"
+    return prompt
 
 
 def call_deepseek(system_prompt: str, user_prompt: str) -> str:

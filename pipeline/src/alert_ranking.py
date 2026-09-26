@@ -9,12 +9,16 @@ from llm_interpretation import build_llm_response
 
 
 def severity_for_score(score: float, signal_count: int) -> str:
-    """Map a combined anomaly score to a severity label."""
-    if score >= 10 or (score >= 6 and signal_count >= 2):
+    """Map a combined anomaly score to a severity label.
+
+    critical is reserved for multi-metric incidents (e.g. an outage hitting revenue,
+    orders and support at once); single-metric deviations top out at high.
+    """
+    if signal_count >= 2 and score >= 25:
         return "critical"
-    if score >= 7 or signal_count >= 2:
+    if score >= 15:
         return "high"
-    if score >= 4:
+    if score >= 8:
         return "medium"
     return "low"
 
@@ -69,6 +73,10 @@ def build_alerts(candidate_df: pd.DataFrame) -> List[Dict[str, Any]]:
             is_expected = False
         if support_item is not None and support_item["expected"] > 0 and float(support_item["actual"]) > 5.0 * float(support_item["expected"]):
             is_expected = False
+
+        # A deviation the business context explains is shown for transparency, never escalated.
+        if is_expected and severity in {"critical", "high"}:
+            severity = "medium"
 
         record = {
             "date": row["date"].strftime("%Y-%m-%d") if hasattr(row["date"], "strftime") else str(row["date"]),
