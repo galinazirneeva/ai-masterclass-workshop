@@ -111,6 +111,20 @@ Calendar context for the same period.
 
 **methodology_critical** - files tagged this way never pass through automated review alone. The anomaly detection logic and threshold calibration in this repo carry this flag.
 
+## Methodology Review Skill
+
+### Try it yourself
+
+We include a general methodology review skill you can use on any code — not just anomaly detection.
+
+1. Open Claude.ai
+2. Paste the skill as a system prompt:
+   pipeline/skills/methodology_review_general.md
+3. Paste any code you are working on
+4. Get a PASS or FAIL verdict with specific findings
+
+The skill works on Python, SQL, R — any code that contains business logic, thresholds, or decisions that affect real outcomes.
+
 ---
 
 ## Getting started

@@ -51,10 +51,20 @@ Thresholds such as z-score cutoffs, revenue multipliers, or support escalation l
 - Prefer a clear verdict over hedged language.
 
 ## Output format
-{
-  "verdict": "PASS" or "FAIL",
-  "silent_failure_risks": [],
-  "human_judgment_required": [],
-  "test_coverage_gaps": [],
-  "threshold_owners": []
-}
+
+## Verdict: PASS or FAIL
+
+### Silent failure risks
+- list each risk
+
+### Human judgment required
+- list each case
+
+### Test coverage gaps
+- list each gap
+
+### Threshold owners
+- list each threshold and who should own it
+
+### One-line summary
+One sentence: what is the core problem with this code?
