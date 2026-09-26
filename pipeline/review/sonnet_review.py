@@ -123,7 +123,8 @@ def call_anthropic(prompt_text: str) -> dict:
 
     payload = {
         "model": ANTHROPIC_MODEL,
-        "max_tokens": 2000,
+        "max_tokens": 3000,
+        "temperature": 0,
         "system": SYSTEM_PROMPT,
         "messages": [
             {
@@ -171,41 +172,78 @@ def parse_response(body: dict) -> dict:
     return extract_json_payload(raw_text)
 
 
+def pr_diff() -> tuple[str, list[str]]:
+    """Diff of this PR against its base branch (falls back to the last commit)."""
+    base = os.environ.get("BASE_REF", "").strip()
+    ref = f"origin/{base}...HEAD" if base else "HEAD~1...HEAD"
+    diff = run_git_command("diff", ref, "--", "pipeline/")
+    names = run_git_command("diff", "--name-only", ref, "--", "pipeline/").splitlines()
+    return diff, [n for n in names if n]
+
+
+def pipeline_output() -> str:
+    """Run the pipeline on data/ and return the alert list the business would see."""
+    sys.path.insert(0, str(SRC_DIR))
+    try:
+        from anomaly_detection import run_pipeline
+        alerts = sorted(run_pipeline(ROOT / "data"), key=lambda a: a["date"])
+        return "\n".join(
+            f"{a['date']} {a['severity']:<8} {a['anomaly_type']:<22} expected={a['is_expected']} metrics={a['related_metrics']}"
+            for a in alerts
+        )
+    except Exception as exc:  # the review must still run; the failure itself is evidence
+        return f"PIPELINE FAILED TO RUN: {exc!r}"
+
+
 def build_prompt(methodology_files: list[str], deepseek_info: dict[str, object]) -> str:
     spec_text = read_text(SPEC_PATH)
-    tests_text = "\n\n===== FILE =====\n\n".join(
-        f"{path.name}\n{read_text(path)}" for path in TEST_PATHS
-    )
+    diff_text, changed = pr_diff()
+    changed_critical = [f for f in changed if f in methodology_files]
+    critical_sources = "\n\n".join(
+        f"===== {f} (full file after this change) =====\n{read_text(ROOT / f)}" for f in changed_critical
+    ) or "(no methodology-critical file changed in this PR)"
 
     return f"""
-Methodology-critical files in pipeline/src:
-{json.dumps(methodology_files, indent=2)}
+You are reviewing ONE pull request, not the whole project.
 
-DeepSeek usage evidence from git log:
-{json.dumps(deepseek_info, indent=2, default=str)}
+Files changed in this PR:
+{json.dumps(changed, indent=2)}
 
-Source-of-truth architecture spec:
+Methodology-critical files changed in this PR:
+{json.dumps(changed_critical, indent=2)}
+
+===== PR DIFF =====
+{diff_text or "(empty diff)"}
+
+{critical_sources}
+
+===== PIPELINE OUTPUT ON REAL DATA (after this change) =====
+{pipeline_output()}
+
+Known ground truth for data/ (Oct 1 - Dec 31, 2025):
+- Must be alerted: 2025-11-05 outage (the only multi-metric incident, should be the most severe),
+  2025-10-20..22 support spike, 2025-10-28..31 churn deterioration, 2025-12-10..12 AI usage spike.
+- Must NOT be critical/high: 2025-11-28 Black Friday (expected), normal weekend revenue dips,
+  AOV dips during campaigns, improvements such as falling churn.
+
+===== ARCHITECTURE SPEC (source of truth) =====
 {spec_text}
 
-Test files under review:
-{tests_text}
-
 Review instructions:
-- Use the methodology rubric from the system prompt as the authoritative Gate 3 review standard.
-- Treat the repo implementation and tests as the authoritative evidence. Do not mark a file as missing if it exists in the workspace.
-- The project is required to process the full 92-day seasonal window from 2025-10-01 through 2025-12-31 and must not stop in October.
-- Black Friday is expected to be suppressed when business_context.csv is loaded. A no-context diagnostic path is allowed only for explicit test simulation and must not be treated as the default production behavior.
-- Missing business context must trigger a fail-fast validation error in production code; hidden silent fallback is a blocking issue.
-- The pipeline must detect the real anomalies in the current data: 2025-11-05 revenue collapse, 2025-10-20 through 2025-10-22 support spike, 2025-10-28 through 2025-10-31 churn spike, and December 2025 AI usage spike.
-- Do not reject the project for optional test coverage gaps that are already satisfied by the repository's actual tests or for legitimate no-context diagnostic modes.
-- Only raise an issue when there is a concrete mismatch between the implementation and the approved project requirements.
+- Judge THIS CHANGE only. Read the diff and the full critical files above; quote the actual code, never guess ("presumably") what it contains.
+- verdict = FAIL only if this change introduces or leaves a silent-failure risk in the lines it touches,
+  or makes the pipeline output above contradict the ground truth. Otherwise PASS.
+- Issues that existed before this PR go into "pre_existing_issues" and do NOT affect the verdict.
+- Keep every list short: at most 3 items each, one sentence per item, most important first.
 - Return ONLY valid JSON with this exact shape:
   {{
     "verdict": "PASS" or "FAIL",
+    "summary": "one sentence: what this change does to the output and whether to trust it",
     "silent_failure_risks": [],
     "human_judgment_required": [],
     "test_coverage_gaps": [],
-    "threshold_owners": []
+    "threshold_owners": [],
+    "pre_existing_issues": []
   }}
 """
 
@@ -222,6 +260,8 @@ def main() -> int:
     review.setdefault("human_judgment_required", [])
     review.setdefault("test_coverage_gaps", [])
     review.setdefault("threshold_owners", [])
+    review.setdefault("summary", "")
+    review.setdefault("pre_existing_issues", [])
 
     REVIEW_PATH.parent.mkdir(parents=True, exist_ok=True)
     REVIEW_PATH.write_text(json.dumps(review, indent=2), encoding="utf-8")
