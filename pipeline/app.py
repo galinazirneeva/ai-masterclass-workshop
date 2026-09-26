@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "pipeline" / "src"))
 
 from anomaly_detection import run_pipeline  # noqa: E402
+from llm_interpretation import build_llm_response  # noqa: E402
 from baseline import METRIC_COLUMNS, compute_expected_baselines, load_datasets, merge_context  # noqa: E402
 
 DATA_DIR = ROOT / "data"
@@ -132,6 +133,30 @@ if not critical.empty:
         f'color:{SEVERITY_COLORS["critical"]}">CRITICAL</span>&nbsp; {lines}</div>',
         unsafe_allow_html=True,
     )
+
+# ---------------------------------------------------------------------------
+# Claude explains the critical alert — on demand, one API call.
+# Detection above is deterministic code; the model only explains it.
+# ---------------------------------------------------------------------------
+for r in critical.itertuples():
+    key = f"explain_{r.date:%Y-%m-%d}"
+    if st.button(f"Explain {r.date:%b %d} with Claude", key=f"btn_{key}"):
+        record = {
+            "date": f"{r.date:%Y-%m-%d}", "anomaly_type": r.anomaly_type, "severity": r.severity,
+            "confidence": float(r.confidence), "context": r.context, "expected_value": r.expected_value,
+            "actual_value": r.actual_value, "delta": r.delta, "related_metrics": list(r.related_metrics),
+        }
+        with st.spinner("Claude Sonnet is reading the alert…"):
+            st.session_state[key] = build_llm_response(record)
+    if key in st.session_state:
+        resp = st.session_state[key]
+        source = "Claude Sonnet" if os.environ.get("ANTHROPIC_API_KEY") else "template (no API key set)"
+        with st.container(border=True):
+            st.caption(f"Explanation · {source}")
+            st.markdown("\n".join("##### " + l.lstrip("# ") if l.startswith("#") else l for l in resp["summary"].splitlines()))
+            st.markdown("**Hypotheses to check**\n" + "\n".join(f"- {h}" for h in resp["recommended_actions"]))
+            st.caption("Claude explains. It does not decide: type and severity come from gated code, "
+                       "and a human confirms the cause.")
 
 # ---------------------------------------------------------------------------
 # Charts — actual vs context-adjusted expected, alerts coloured by severity
