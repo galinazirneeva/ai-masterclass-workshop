@@ -29,6 +29,32 @@ def confidence_for_score(score: float, signal_count: int) -> float:
     return round(max(0.0, min(confidence, 0.99)), 2)
 
 
+def is_correlated_outage(revenue_item: Dict[str, Any] | None, support_item: Dict[str, Any] | None) -> bool:
+    """Detect the correlated-outage shape from spec section 10: revenue collapses
+    to under 40% of expected while support tickets exceed 3x expected, on the same day.
+
+    This pattern is the inverse of a demand event (which moves both metrics the same
+    direction), so it must override any business-context suppression downstream.
+
+    TODO(spec 10.1): the spec calls for comparing against the full baseline row
+    (revenue_usd_expected / support_tickets_expected) regardless of whether either
+    metric crossed its z-score threshold. `candidate_df` here only carries metrics
+    that already made it into `anomalies` (filtered upstream in scoring.py), so a
+    metric under threshold is invisible to this check. Widening the input to carry
+    the full baseline row requires a change in scoring.py, which is out of scope
+    for this alert_ranking.py-only implementation pass.
+    """
+    if revenue_item is None or support_item is None:
+        return False
+    revenue_expected = float(revenue_item["expected"])
+    support_expected = float(support_item["expected"])
+    if revenue_expected <= 0 or support_expected <= 0:
+        return False
+    revenue_collapsed = float(revenue_item["actual"]) < 0.40 * revenue_expected
+    support_surged = float(support_item["actual"]) > 3.0 * support_expected
+    return revenue_collapsed and support_surged
+
+
 def classify_metric_event(metric: str, z_score: float) -> str:
     """Return the anomaly category name for a metric-level event."""
     metric_map = {
@@ -78,6 +104,14 @@ def build_alerts(candidate_df: pd.DataFrame) -> List[Dict[str, Any]]:
         if is_expected and severity in {"critical", "high"}:
             severity = "medium"
 
+        # Spec section 10: a same-day revenue collapse + support surge is a correlated
+        # outage. This overrides business-context suppression above and the score-based
+        # severity/type below, regardless of holiday, campaign or release-day context.
+        if is_correlated_outage(revenue_item, support_item):
+            anomaly_type = "outage"
+            severity = "critical"
+            is_expected = False
+
         record = {
             "date": row["date"].strftime("%Y-%m-%d") if hasattr(row["date"], "strftime") else str(row["date"]),
             "anomaly_type": anomaly_type,
@@ -106,4 +140,10 @@ def build_alerts(candidate_df: pd.DataFrame) -> List[Dict[str, Any]]:
     return alerts
 
 
-__all__ = ["severity_for_score", "confidence_for_score", "classify_metric_event", "build_alerts"]
+__all__ = [
+    "severity_for_score",
+    "confidence_for_score",
+    "classify_metric_event",
+    "is_correlated_outage",
+    "build_alerts",
+]
