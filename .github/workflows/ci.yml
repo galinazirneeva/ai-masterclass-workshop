@@ -53,10 +53,13 @@ jobs:
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      BASE_REF: ${{ github.base_ref }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v6
@@ -93,10 +96,12 @@ jobs:
               : '';
             const icon = r.verdict === 'PASS' ? '✅' : '❌';
             const body = `## ${icon} Gate 3 — Sonnet methodology review: **${r.verdict}**\n\n`
+              + (r.summary ? `> ${r.summary}\n\n` : '')
               + list('Silent failure risks', r.silent_failure_risks)
               + list('Needs human judgment', r.human_judgment_required)
               + list('What tests do not cover', r.test_coverage_gaps)
               + list('Threshold owners', r.threshold_owners)
+              + list('Pre-existing (not caused by this PR)', r.pre_existing_issues)
               + `_Gate 3 advises. A human decides._`;
             await github.rest.issues.createComment({
               owner: context.repo.owner, repo: context.repo.repo,
