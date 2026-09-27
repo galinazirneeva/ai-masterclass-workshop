@@ -1,7 +1,7 @@
 # methodology_critical: true
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 
@@ -42,6 +42,39 @@ def classify_metric_event(metric: str, z_score: float) -> str:
     return metric_map.get(metric, "metric_anomaly")
 
 
+# Correlated outage override thresholds (spec section 10). These encode business risk
+# appetite rather than anything derived from the data: owner Galina Zirneeva (Data & AI),
+# to be reviewed with ops after the pilot. Distinct from the 0.2x revenue / 5.0x support
+# guards below, which stay as they are.
+OUTAGE_REVENUE_RATIO = 0.40
+OUTAGE_SUPPORT_RATIO = 3.0
+
+
+def is_correlated_outage(
+    revenue_item: Optional[Dict[str, Any]],
+    support_item: Optional[Dict[str, Any]],
+) -> bool:
+    """True when revenue collapses while support load surges on the same date.
+
+    Reads the anomaly-list entries for revenue_usd and support_tickets, so a metric that
+    never crossed its z-score threshold in scoring.py is invisible here (known limitation,
+    spec section 10.5). Both legs are strict; a missing entry or a non-positive expected
+    value means the rule does not fire and no division happens.
+    """
+    if revenue_item is None or support_item is None:
+        return False
+
+    revenue_expected = float(revenue_item["expected"])
+    support_expected = float(support_item["expected"])
+    if revenue_expected <= 0 or support_expected <= 0:
+        return False
+
+    return (
+        float(revenue_item["actual"]) < OUTAGE_REVENUE_RATIO * revenue_expected
+        and float(support_item["actual"]) > OUTAGE_SUPPORT_RATIO * support_expected
+    )
+
+
 def build_alerts(candidate_df: pd.DataFrame) -> List[Dict[str, Any]]:
     """Rank candidate dates into alert records aligned with the specification output."""
     alerts: List[Dict[str, Any]] = []
@@ -78,6 +111,15 @@ def build_alerts(candidate_df: pd.DataFrame) -> List[Dict[str, Any]]:
         if is_expected and severity in {"critical", "high"}:
             severity = "medium"
 
+        # Final classification step: a revenue collapse alongside a support surge is the
+        # opposite shape to any holiday, campaign or release, so business context must not
+        # explain it away. This supersedes the downgrade above and whatever severity the
+        # composite score would have earned. Only these three fields are written.
+        if is_correlated_outage(revenue_item, support_item):
+            anomaly_type = "outage"
+            severity = "critical"
+            is_expected = False
+
         record = {
             "date": row["date"].strftime("%Y-%m-%d") if hasattr(row["date"], "strftime") else str(row["date"]),
             "anomaly_type": anomaly_type,
@@ -106,4 +148,10 @@ def build_alerts(candidate_df: pd.DataFrame) -> List[Dict[str, Any]]:
     return alerts
 
 
-__all__ = ["severity_for_score", "confidence_for_score", "classify_metric_event", "build_alerts"]
+__all__ = [
+    "severity_for_score",
+    "confidence_for_score",
+    "classify_metric_event",
+    "is_correlated_outage",
+    "build_alerts",
+]
