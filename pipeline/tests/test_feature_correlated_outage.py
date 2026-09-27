@@ -36,14 +36,8 @@ def test_correlated_outage_is_critical_and_not_expected(alerts):
     Multiple metrics collapse together on this date, which is the signature of a
     real incident rather than a holiday/campaign-driven fluctuation. The pipeline
     must classify it as an 'outage' at 'critical' severity and must NOT mark it as
-    expected, because no business context legitimately explains a simultaneous
-    multi-metric failure.
-
-    Why Gate 3 cannot verify this: Gate 3 checks that thresholds and context
-    rules are configured, but it cannot confirm that the pipeline actually
-    overrides context when a correlated outage is detected on a specific real
-    date. Only running the pipeline against the real dataset proves the override
-    fires.
+    expected, even though a November Sale campaign is active that day: a
+    simultaneous revenue collapse and support surge overrides campaign context.
     """
     matches = _find(alerts, "2025-11-05")
     assert matches, "Expected an alert on 2025-11-05 but none was produced"
@@ -59,10 +53,6 @@ def test_correlated_outage_is_unique(alerts):
     The correlated-outage override is a high-severity, high-confidence signal.
     If the pipeline emitted 'outage' for more than one date, it would be
     over-triggering and would erode operator trust in the critical severity.
-
-    Why Gate 3 cannot verify this: Gate 3 validates the rule definition, not the
-    cardinality of its firing across the real dataset. A mis-tuned correlation
-    window could produce multiple outages without any config error.
     """
     outage_dates = [a["date"] for a in alerts if a["anomaly_type"] == "outage"]
     assert outage_dates == ["2025-11-05"], (
@@ -77,11 +67,6 @@ def test_holiday_context_is_expected_and_not_outage(alerts):
     the pipeline must NOT label it an 'outage'. It should be marked
     is_expected=True and downgraded to 'medium' severity, reflecting that the
     anomaly is anticipated rather than an incident.
-
-    Why Gate 3 cannot verify this: Gate 3 confirms the context file exists and
-    the expected-multiplier logic is present, but it cannot confirm that the
-    real 2025-11-28 row is actually recognized as expected and downgraded. That
-    requires executing the pipeline on the real data.
     """
     matches = _find(alerts, "2025-11-28")
     assert matches, "Expected an alert on 2025-11-28 but none was produced"
@@ -98,10 +83,6 @@ def test_total_alert_count_is_stable(alerts):
     adjustment, or conflict resolution will shift this number, signaling that
     business behavior changed even if no test explicitly targets the changed
     rule.
-
-    Why Gate 3 cannot verify this: Gate 3 inspects configuration and rule
-    definitions, not the aggregate output volume of the pipeline on the real
-    dataset. Only an end-to-end run reveals the true alert count.
     """
     assert len(alerts) == 15, f"Expected 15 alerts, got {len(alerts)}"
 
@@ -114,11 +95,6 @@ def test_outage_overrides_holiday_context_on_same_date(alerts):
     and is_expected stays False. This test asserts the invariant across the
     real output by checking that no 'outage' alert is ever marked expected or
     downgraded below critical.
-
-    Why Gate 3 cannot verify this: Gate 3 can confirm the override rule is
-    coded, but it cannot prove the precedence actually holds in the real
-    pipeline output where context and severity interact. That requires running
-    the pipeline and inspecting the emitted alerts.
     """
     for alert in alerts:
         if alert["anomaly_type"] == "outage":
