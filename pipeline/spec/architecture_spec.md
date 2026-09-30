@@ -314,3 +314,86 @@ The project is accepted when all of the following are true:
 6. Methodology-critical files are reviewed and approved before merge.
 
 This specification is the source of truth for the implementation and review process.
+
+---
+
+## 10. Correlated Outage Override (methodology_critical)
+
+### 10.1 The rule
+
+On any single date, if **both** of the following hold against that date's context-adjusted expected values:
+
+- `revenue_usd` < **0.40 ×** `revenue_usd_expected`, and
+- `support_tickets` > **3.0 ×** `support_tickets_expected`
+
+then the emitted alert must be classified as:
+
+- `anomaly_type`: `"outage"`
+- `severity`: `"critical"`
+- `is_expected`: `false`
+
+These three values are **forced**, not suggested. They apply regardless of `is_holiday`, `holiday_name`, `marketing_campaign`, `is_release_day` or `expected_revenue_multiplier`, and regardless of the composite anomaly score and the severity `severity_for_score` would otherwise assign. Both conditions are strict inequalities and both must hold on the same date; either leg alone leaves classification to the normal path.
+
+**Input source.** The rule reads the `actual` and `expected` fields of the `revenue_usd` and `support_tickets` entries in that date's anomaly list — the only per-metric values `build_alerts` receives. If either entry is absent, or either expected value is zero or negative, the rule does not fire and no division is performed. A metric only appears in that list if it crossed its z-score threshold in `pipeline/src/scoring.py`, which creates a real detection gap; §10.5 records it and the change needed to close it.
+
+### 10.2 Why it overrides business context
+
+Business context exists to suppress deviations that a known demand event explains (§4.3). Every such event — a holiday, a campaign, a release — moves revenue and support load in the *same* direction: more traffic means more sales *and* more tickets.
+
+A day where revenue falls to under half of expectation while support load more than triples is the opposite shape. No promotion, holiday or launch predicts it. That divergence is the signature of a platform failure: customers are arriving, failing to transact, and contacting support about it. Reading such a day as "expected, there was a campaign running" inverts the meaning of the evidence.
+
+This is precisely the silent-failure mode Gate 3 exists to catch (§8); §5.1 already requires that critical operational alerts never be silently dropped, and §9.3 requires that `2025-11-05` be treated as a real outage signal. Today that date is classified `critical` only because its composite score happens to reach 39.35 across three signals. The override makes the classification a guaranteed property of the rule rather than a side effect of the magnitude the score happens to reach.
+
+### 10.3 Where it is implemented
+
+In `pipeline/src/alert_ranking.py`, inside `build_alerts`, as the **final classification step for each record** — after `anomaly_type`, `severity`, `confidence` and `is_expected` have been computed, and after the "expected deviations are never escalated" downgrade. The override supersedes that downgrade. This ordering is part of the contract, not an implementation detail.
+
+`pipeline/src/alert_ranking.py` is already designated `methodology_critical` in §6.5, so this rule inherits the mandatory Gate 3 sign-off. Human review is required because the rule hard-overrides the business-context layer: a wrong threshold here does not degrade an alert, it manufactures or suppresses a critical one, and no downstream stage can correct it.
+
+**The override is additive.** The existing independent guards — revenue below 0.2× expected, or support above 5.0× expected, each of which alone forces `is_expected = false` — remain exactly as they are. They are not folded into this rule and their thresholds are not touched. In particular, lowering the 5.0× support guard to 3.0× to "match" this rule would flip `2025-11-28` to `is_expected = false` and break the Black Friday suppression required by §4.3.
+
+**Fields that must not move.** Primary-metric selection (largest |z|) is unchanged, so `expected_value`, `actual_value` and `delta` continue to describe the same metric they describe today. `score`, `confidence`, `context` and `related_metrics` are unchanged. Only `anomaly_type`, `severity` and `is_expected` are written by this rule.
+
+`llm_summary` and `root_cause_hypotheses` are derived from `anomaly_type` and will therefore change for an overridden date. That is expected. Note that `pipeline/src/llm_interpretation.py` has no `outage` branch in its fallback hypotheses, so an offline run produces the generic fallback text. Adding a dedicated `outage` branch is a deliberate follow-up, out of scope here.
+
+### 10.4 Acceptance criteria
+
+Running the pipeline on `data/`:
+
+1. The alert list still contains **15 alerts, on the same 15 dates** as before the change.
+2. `2025-11-05` changes in exactly one classification field: `anomaly_type` becomes `"outage"` (from `"support_spike"`). On that record `severity` remains `critical`, `is_expected` remains `false`, `score` remains `39.35`, `confidence` remains `0.99`, `expected_value` remains `16.0`, `actual_value` remains `132.0`, `delta` remains `116.0`, and `related_metrics` remains `["revenue_usd", "orders_count", "support_tickets"]`. Its `llm_summary` and `root_cause_hypotheses` re-render from the new type.
+3. **No other alert changes in any field.** In particular `2025-11-28` remains `support_spike` / `medium` / `is_expected = true`, and the twelve `ai_usage_spike`, `support_spike` and `churn_deterioration` alerts in October, November and December are untouched.
+4. `2025-11-05` is the only date in the `2025-10-01`–`2025-12-31` window that satisfies both legs of the rule. This is a property of the current dataset, not a guarantee of the rule.
+5. The full existing test suite passes unmodified.
+
+### 10.5 What tests cannot verify
+
+The following require human judgment and must be resolved at Gate 1 and re-examined at Gate 3. A green test suite is not evidence on any of them.
+
+**The revenue leg has a blind spot (accepted at Gate 1 — see §10.6).** The rule can only see metrics that reached the anomaly list, and `revenue_usd` must clear a z-score of 3.2 to get there. Revenue is volatile enough that a severe shortfall often does not. Setting `2025-11-05` aside, ten dates in the current window sit below 40% of expected revenue — `2025-11-25` through `2025-11-27`, `2025-11-29`, `2025-11-30`, `2025-12-20`, and `2025-12-26` through `2025-12-29` — with revenue z-scores ranging from +0.7 to −2.5, all well inside the ±3.2 threshold, so not one of them carries a `revenue_usd` entry. On `2025-11-30` revenue runs at 20.2% of expected and this rule cannot see it. Had support tickets tripled that day, no outage would have been classified.
+
+**On the current data the blind spot costs nothing.** Support load is quiet on all ten of those dates: the highest support ratio among them is 1.18× expected (`2025-11-25`), so none comes near the 3.0× second leg and no outage is missed. Six of the ten fall below 40% only because context multipliers inflate their expected revenue — `2025-11-25` through `2025-11-30` under the Black Friday Week 3.0× multiplier, and `2025-12-20` under the Christmas Campaign 1.8× — and all six sit at or above 40% of an unmultiplied baseline, `2025-11-25` reaching 119%. Two of them, `2025-11-25` and `2025-11-26`, carry *positive* revenue z-scores while nominally 60% below expectation, which is that inflation showing through directly. The remaining four, `2025-12-26` through `2025-12-29`, are shortfalls not explained by the current context (likely post-holiday seasonality, not necessarily incidents) that stay below 40% even at a 1.0× multiplier; `2025-12-26` carries a deflating 0.5× multiplier and still runs at 24.6% of expected. A multiplier review therefore accounts for six of these dates but not for the other four.
+
+Closing the gap means carrying `revenue_usd_expected` and `support_tickets_expected` on every candidate row out of `build_alert_candidates` in `pipeline/src/scoring.py`, so the rule tests the ratios directly instead of inheriting the z-score gate. Gate 1 has deferred that change pending a review of the context multipliers (§10.6).
+
+**The thresholds have no owner.** 40% and 3× encode business risk appetite; they are not derived from the data. The qualifying date sits at 11.3% of expected revenue and 8.25× expected support, so every criterion in §10.4 passes identically for any revenue threshold between roughly 12% and 90% and any support threshold between roughly 1× and 8×. A passing suite confirms the rule fires on this date; it says nothing about whether these are the right numbers. A named owner for both must be recorded.
+
+**Black Friday is closer to this rule than it looks.** `2025-11-28` already runs at 3.73× expected support tickets, satisfying the support leg outright. It is held back only by the revenue leg, at 69.7% of an expectation inflated by a 4.5× multiplier. Raise that multiplier, or have a Black Friday underperform by roughly another 30%, and the largest promotional day of the year is force-classified a critical outage that business context is explicitly forbidden to suppress. No test against the current dataset surfaces this. A human must decide whether the override should be bounded — for example disregarded when the shortfall is measured against a multiplier above some value — or whether a false critical during a campaign is an acceptable price for never missing a real outage.
+
+**The rule inherits the baseline's accuracy.** Both legs are ratios against §6.3 expected values. Where those expectations are wrong, the override converts a quiet baseline error into a forced critical alert that nothing downstream can soften. Someone must confirm the expected-value model is trustworthy enough to carry that weight.
+
+**The rule infers a cause from a shape.** A data pipeline failure, a botched migration, a mis-scaled multiplier and a genuine platform outage all produce the same two-metric signature. Tests can prove the classification fired; only a human can confirm the day was in fact an incident. The `"outage"` label reaches non-technical stakeholders as a factual claim.
+
+**Forcing `critical` bypasses severity policy.** `severity_for_score` no longer has a say on these dates. Whether every correlated day is worth paging on-call is an alerting-policy decision, not a modelling one.
+
+**The window is one day.** A degradation unfolding gradually across three days, or an incident straddling midnight with each half below threshold, is invisible to this rule. Nothing in the current suite would reveal that gap, and no failing test would ever point at it.
+
+### 10.6 Gate 1 decision
+
+Recorded 2026-09-27.
+
+1. **Scope is confined to `pipeline/src/alert_ranking.py`.** `pipeline/src/scoring.py` must not be modified in this change. The revenue-leg blind spot described in §10.5 is accepted as a known limitation of this phase.
+2. **Closing the blind spot is a separate change**, blocked on a review of the context multipliers in `data/business_context.csv`: six of the ten affected dates fall below the 40% threshold only because those multipliers inflate expected revenue, so the multipliers must be settled before the detection gap is re-scoped.
+3. **Threshold ownership.** The 40% revenue and 3.0× support thresholds are owned by Galina Zirneeva (Data & AI), to be reviewed with ops after the pilot. The context multipliers in `data/business_context.csv` are owned by marketing.
+4. **The 5.0× support guard is not to be changed.** It and the 0.2× revenue guard beside it stand as recorded in §10.3.
+5. **Placement.** §10 remains appended after §9; sections 1 through 9 are not renumbered.
